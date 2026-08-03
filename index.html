@@ -302,6 +302,7 @@
       </div>
 
       <button class="btn btn-primary" id="saveSessionBtn" style="width:100%; margin-top:8px; padding:13px;">Save session</button>
+      <button type="button" class="btn btn-ghost" id="cancelEditBtn" style="width:100%; margin-top:8px; display:none;">Cancel edit</button>
     </div>
   </section>
 
@@ -408,6 +409,16 @@
           </select>
         </div>
       </div>
+      <div class="row">
+        <div class="field">
+          <label for="trainingEmphasis">Training emphasis</label>
+          <select id="trainingEmphasis">
+            <option value="balanced" selected>Balanced</option>
+            <option value="lower">Lower body & glute emphasis</option>
+            <option value="upper">Upper body emphasis</option>
+          </select>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -460,6 +471,7 @@ let sessions = [];
 let profile = { weight:null, height:null, goal:null, logs:[] };
 let exerciseCounter = 0;
 let currentType = 'strength';
+let editingSessionId = null;
 let selectedGoal = null;
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -583,7 +595,7 @@ document.getElementById('saveSessionBtn').addEventListener('click', ()=>{
   if(!dateVal){ showToast('Pick a date'); return; }
 
   const session = {
-    id: uid(),
+    id: editingSessionId || uid(),
     date: dateVal,
     name: document.getElementById('sessionName').value.trim(),
     type: currentType,
@@ -593,16 +605,28 @@ document.getElementById('saveSessionBtn').addEventListener('click', ()=>{
   if(currentType === 'strength'){
     const blocks = [...document.querySelectorAll('.exercise-block')];
     const exercises = [];
+    const warnings = [];
     for(const b of blocks){
       const name = b.querySelector('.ex-name-input').value.trim();
       if(!name) continue;
-      const sets = [...b.querySelectorAll('.sets-body tr')].map(row=>({
-        reps: Number(row.querySelector('.set-reps').value) || 0,
-        weight: Number(row.querySelector('.set-weight').value) || 0
-      })).filter(s => s.reps > 0 || s.weight > 0);
+      const rows = [...b.querySelectorAll('.sets-body tr')];
+      const sets = [];
+      rows.forEach((row, i) => {
+        const reps = Number(row.querySelector('.set-reps').value) || 0;
+        const weight = Number(row.querySelector('.set-weight').value) || 0;
+        if(reps === 0 && weight === 0) return;
+        if(reps === 0 && weight > 0){
+          warnings.push(`${name} — set ${i+1}: has ${weight}kg but 0 reps`);
+        }
+        sets.push({ reps, weight });
+      });
       if(sets.length) exercises.push({ name, sets });
     }
     if(!exercises.length){ showToast('Add at least one exercise with sets'); return; }
+    if(warnings.length){
+      showToast('Check: ' + warnings[0] + (warnings.length > 1 ? ` (+${warnings.length - 1} more)` : ''));
+      return;
+    }
     session.exercises = exercises;
   } else {
     const duration = Number(document.getElementById('cardioDuration').value) || 0;
@@ -613,11 +637,38 @@ document.getElementById('saveSessionBtn').addEventListener('click', ()=>{
     session.calories = Number(document.getElementById('cardioCalories').value) || null;
   }
 
-  sessions.unshift(session);
+  if(editingSessionId){
+    const idx = sessions.findIndex(s => s.id === editingSessionId);
+    if(idx >= 0) sessions[idx] = session; else sessions.unshift(session);
+    showToast('Session updated');
+  } else {
+    sessions.unshift(session);
+    showToast('Session saved');
+  }
   persistSessions();
-  showToast('Session saved');
+  editingSessionId = null;
+  document.getElementById('saveSessionBtn').textContent = 'Save session';
   resetForm();
 });
+
+function loadSessionIntoForm(s){
+  editingSessionId = s.id;
+  document.getElementById('saveSessionBtn').textContent = 'Update session';
+  document.getElementById('cancelEditBtn').style.display = 'block';
+  document.getElementById('sessionDate').value = s.date;
+  document.getElementById('sessionName').value = s.name || '';
+  document.getElementById('sessionNotes').value = s.notes || '';
+  setType(s.type);
+  if(s.type === 'strength'){
+    document.getElementById('exerciseList').innerHTML = '';
+    (s.exercises || []).forEach(ex => addExerciseBlock(ex));
+  } else {
+    document.getElementById('cardioType').value = s.cardioType || 'Treadmill / Run';
+    document.getElementById('cardioDuration').value = s.duration || '';
+    document.getElementById('cardioDistance').value = s.distance || '';
+    document.getElementById('cardioCalories').value = s.calories || '';
+  }
+}
 
 function resetForm(){
   document.getElementById('sessionName').value = '';
@@ -626,8 +677,16 @@ function resetForm(){
   document.getElementById('cardioDuration').value = '';
   document.getElementById('cardioDistance').value = '';
   document.getElementById('cardioCalories').value = '';
+  document.getElementById('cancelEditBtn').style.display = 'none';
   addExerciseBlock();
 }
+
+document.getElementById('cancelEditBtn').addEventListener('click', ()=>{
+  editingSessionId = null;
+  document.getElementById('saveSessionBtn').textContent = 'Save session';
+  resetForm();
+  showToast('Edit cancelled');
+});
 
 /* ---------- history ---------- */
 function fmtDate(d){
@@ -707,6 +766,7 @@ function renderHistory(){
           ${body}
           ${s.notes ? `<div class="notes-block">${escapeHtml(s.notes)}</div>` : ''}
           <div class="session-actions">
+            <button class="btn btn-ghost btn-sm edit-session">Edit</button>
             <button class="btn btn-danger btn-sm delete-session">Delete</button>
           </div>
         </div>
@@ -716,6 +776,18 @@ function renderHistory(){
   container.querySelectorAll('.session-head').forEach(head=>{
     head.addEventListener('click', ()=>{
       head.nextElementSibling.classList.toggle('open');
+    });
+  });
+  container.querySelectorAll('.edit-session').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const card = btn.closest('.session');
+      const id = card.dataset.id;
+      const s = sessions.find(sess => sess.id === id);
+      if(!s) return;
+      loadSessionIntoForm(s);
+      document.querySelector('nav button[data-view="log"]').click();
+      showToast('Editing session — make your changes and save');
     });
   });
   container.querySelectorAll('.delete-session').forEach(btn=>{
@@ -858,6 +930,7 @@ const EXERCISES = {
   horizontalPull: [{name:'Barbell row',tier:'compound'},{name:'Seated cable row',tier:'compound'},{name:'Chest-supported row',tier:'compound'},{name:'Dumbbell row',tier:'compound'}],
   biceps: [{name:'Barbell curl',tier:'isolation'},{name:'Dumbbell curl',tier:'isolation'}],
   core: [{name:'Plank',tier:'isolation'},{name:'Hanging knee raise',tier:'isolation'},{name:'Bicycle crunch',tier:'isolation'},{name:'Side plank',tier:'isolation'},{name:'Russian twist',tier:'isolation'}],
+  glutes: [{name:'Hip thrust',tier:'accessory'},{name:'Glute bridge',tier:'accessory'},{name:'Cable glute kickback',tier:'isolation'},{name:'Sumo deadlift',tier:'compound'}],
 };
 
 const FOCUS_CATEGORIES = {
@@ -926,8 +999,23 @@ function exercisesForDuration(min){
   return 7;
 }
 
-function pickExercises(focus, variant, count){
-  const cats = FOCUS_CATEGORIES[focus];
+function getFocusCategories(focus, emphasis){
+  const base = FOCUS_CATEGORIES[focus].slice();
+  if(emphasis === 'lower' && ['Full Body','Lower','Legs'].includes(focus)){
+    const idx = base.indexOf('hinge');
+    if(idx >= 0) base.splice(idx+1, 0, 'glutes'); else base.unshift('glutes');
+    if(!base.includes('legAccessory')) base.push('legAccessory');
+  }
+  if(emphasis === 'upper' && ['Full Body','Upper','Push','Pull'].includes(focus)){
+    ['shoulderIsolation','triceps','biceps'].forEach(cat=>{
+      if(!base.includes(cat)) base.push(cat);
+    });
+  }
+  return base;
+}
+
+function pickExercises(focus, variant, count, emphasis){
+  const cats = getFocusCategories(focus, emphasis);
   const result = [];
   let catIndex = 0, round = 0, guard = 0;
   while(result.length < count && guard < 50){
@@ -1008,7 +1096,7 @@ function getSplit(goal, daysPerWeek){
   ];
 }
 
-function buildPlan(goal, daysPerWeek, sessionMinutes){
+function buildPlan(goal, daysPerWeek, sessionMinutes, emphasis){
   const split = getSplit(goal, daysPerWeek);
   const scheme = GOAL_SCHEME[goal];
   const exCount = exercisesForDuration(sessionMinutes);
@@ -1023,7 +1111,7 @@ function buildPlan(goal, daysPerWeek, sessionMinutes){
     }
     seen[d.focus] = (seen[d.focus]||0) + 1;
     const label = focusCounts[d.focus] > 1 ? `${d.focus} ${String.fromCharCode(64 + seen[d.focus])}` : d.focus;
-    const picks = pickExercises(d.focus, d.variant, exCount);
+    const picks = pickExercises(d.focus, d.variant, exCount, emphasis);
     const exercises = picks.map(ex => ({
       name: ex.name,
       sets: String(scheme[ex.tier].sets),
@@ -1046,6 +1134,7 @@ document.getElementById('generatePlanBtn').addEventListener('click', ()=>{
   profile.goal = selectedGoal;
   profile.daysPerWeek = Number(document.getElementById('scheduleDays').value) || 3;
   profile.sessionMinutes = Number(document.getElementById('scheduleMinutes').value) || 45;
+  profile.emphasis = document.getElementById('trainingEmphasis').value || 'balanced';
   persistProfile();
   renderPlan();
 });
@@ -1053,7 +1142,8 @@ document.getElementById('generatePlanBtn').addEventListener('click', ()=>{
 function renderPlan(){
   const daysPerWeek = profile.daysPerWeek || 3;
   const sessionMinutes = profile.sessionMinutes || 45;
-  const plan = buildPlan(selectedGoal, daysPerWeek, sessionMinutes);
+  const emphasis = profile.emphasis || 'balanced';
+  const plan = buildPlan(selectedGoal, daysPerWeek, sessionMinutes, emphasis);
   const planCard = document.getElementById('planCard');
   if(!plan){ planCard.style.display = 'none'; return; }
 
@@ -1102,6 +1192,7 @@ function renderGoalsView(){
   if(profile.height) document.getElementById('profileHeight').value = profile.height;
   if(profile.daysPerWeek) document.getElementById('scheduleDays').value = profile.daysPerWeek;
   if(profile.sessionMinutes) document.getElementById('scheduleMinutes').value = profile.sessionMinutes;
+  if(profile.emphasis) document.getElementById('trainingEmphasis').value = profile.emphasis;
   renderMeasurementLog();
   if(profile.goal){
     selectedGoal = profile.goal;
